@@ -1,0 +1,90 @@
+
+function is_newer_than() {
+  if [[ "$#" -lt 2 ]]; then
+    echo "wrong arguments"
+    return 1
+  fi
+  local -r a="$1"
+  if [[ ! -e "$a" ]]; then
+    return 1
+  fi
+  if [[ "$#" -eq "1" ]]; then return 0; fi
+  shift
+  for t in "$@" ; do
+    if [[ ! -e "$t" ]]; then continue ; fi
+    if ! [[ "$a" -nt "$t" ]]; then
+      return 1
+    fi
+  done
+  return 0
+}
+
+function build_create_llvm_prof() {
+  if [[ "$#" -ne "2" ]]; then
+    echo "wrong or missing argument(s)"
+    return 1
+  fi
+  local -r citc="$1"
+  local -r dest_dir="$2"
+  if [[ ! -d "$dest_dir" ]]; then
+    echo "$dest_dir is not valid"
+    return 1
+  fi
+  local google3
+  if echo "$citc" | grep -qF "/" 1>/dev/null 2>&1 ; then
+    google3=/google/src/cloud/"$citc"/google3
+  else
+    google3=/google/src/cloud/${USER}/"$citc"/google3
+  fi
+  cd "${google3}"
+  local -a __deps=( create_llvm_prof.cc
+                  perfdata_reader
+                  profile_reader
+                  llvm_propeller_binary_address_mapper
+                  llvm_propeller_profile_computer
+                  llvm_propeller_profile_writer )
+  local -a deps=( )
+  function __create_deps() {
+    local -r name="$2"
+    if echo "$name" | grep -qF "." 1>/dev/null 2>&1 ; then
+      deps+=( "${google3}/devtools/crosstool/autofdo/$name" )
+    else
+      deps+=( "${google3}/devtools/crosstool/autofdo/${name}.h"
+              "${google3}/devtools/crosstool/autofdo/${name}.cc" )
+    fi
+  }
+  mapfile -d" " -t -C __create_deps -c 1 < <(echo -n "${__deps[@]}")
+  if is_newer_than "${dest_dir}/create_llvm_prof" "${deps[@]}" ; then
+    echo "Skipped building create_llvm_prof"
+  else
+    if ! blaze build -c opt devtools/crosstool/autofdo:create_llvm_prof ; then
+      cd -
+      return 1
+    fi
+    cp -fv blaze-bin/devtools/crosstool/autofdo/create_llvm_prof "$dest_dir"
+  fi
+  cd -
+}
+
+
+function main() {
+  if [[ "$#" -eq "0" ]]; then return ; fi
+  local -a args=( "$@" )
+  for c in "${args[@]}" ; do
+    if ! echo "$c" | grep -F " " && [[ "$c" =~ .*\.log ]]; then
+      oldc="$c"
+      c="$(basename "${c%%.log}")"
+      echo "Deducted: ${oldc} ==> ${c}"
+    fi
+    if echo "$c" | grep -qF " " ; then
+      mapfile -t cmds < <( echo "$c" | tr " " "\n" )
+      logfile="$(pwd)"/"$(echo "$c" | sed -e 's! !_!g' -e 's!/!_!g')".log
+      echo ">>> $logfile"
+      "${cmds[@]}" 2>&1 | tee "$logfile"
+      continue
+    else
+      echo "$c"
+      "$c" 2>&1 | tee "$(pwd)/${c}.log"
+    fi
+  done
+}
